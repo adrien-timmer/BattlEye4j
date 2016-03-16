@@ -20,8 +20,10 @@ public class BEClient {
     private DatagramChannel datagramChannel;
     private AtomicLong lastReceivedTime;
     private AtomicLong lastSentTime;
+    private int sequenceNumber;
 
     Runnable receiveRunnable = () -> {
+        //TODO: setup to only have one command sent at a time otherwhise received data maybe out of order
         try {
             while (datagramChannel.isConnected()) {
                 if (receiveData()) {
@@ -46,15 +48,40 @@ public class BEClient {
                         }
                         break;
                         case Command: {
+                            //Check to see if this message is segmented by verifying if the 8th byte is a 0
+                            byte[] tempArray = receiveBuffer.array();
+                            if (receiveBuffer.array()[7] == 0) {
+                                int totalPackets = receiveBuffer.get();
+                                int packetIndex = receiveBuffer.get();
+                                String[] completeMessageArray = new String[totalPackets];
+                                receiveBuffer.get();
+                                completeMessageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
 
+                                //Process existing packet and retrieve the next
+                                while (packetIndex < totalPackets) {
+                                    receiveData();
+                                    receiveBuffer.get();
+                                    completeMessageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
+                                    packetIndex++;
+                                }
+
+                                String completeMessage = "";
+                                for (String message : completeMessageArray) {
+                                    completeMessage += message;
+                                }
+
+                                System.out.println(completeMessage);
+                            } else {
+                                receiveBuffer.get();
+                                System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
+                            }
                         }
                         break;
                         case Server: {
+                            //Output the message and send an acknowledgement to the server
                             System.out.println("Received server message");
                             byte serverSequenceNumber = receiveBuffer.get();
                             System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
-                            constructPacket(BEMessageType.Server, serverSequenceNumber, null);
-                            sendData();
                         }
                         break;
                         case Unknown: {
@@ -86,11 +113,32 @@ public class BEClient {
 
         lastSentTime = new AtomicLong(System.currentTimeMillis());
         lastReceivedTime = new AtomicLong(System.currentTimeMillis());
+        sequenceNumber = -1;
 
         receiveThread.start();
 
         constructPacket(BEMessageType.Login, -1, beloginCredential.getHostPassword());
         sendData();
+
+        try {
+            Thread.sleep(5000);
+            constructPacket(BEMessageType.Command, 0, BECommandType.Bans.toString());
+            sendData();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void disconnect() {
+        try {
+            datagramChannel.close();
+            receiveThread.interrupt();
+            receiveThread = null;
+            sendBuffer = null;
+            receiveBuffer = null;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     //Contructs a packet following the BE protocol
@@ -117,7 +165,7 @@ public class BEClient {
     }
 
     public void sendData() {
-        if (datagramChannel.isConnected()){
+        if (datagramChannel.isConnected()) {
             try {
                 datagramChannel.write(sendBuffer);
                 lastSentTime.set(System.currentTimeMillis());
@@ -127,6 +175,8 @@ public class BEClient {
         }
     }
 
+    //Receives and validates the incoming packet
+    //'B'(0x42) | 'E'(0x45) | 4-byte CRC32 checksum of the subsequent bytes | 0xFF
     public boolean receiveData() throws IOException {
         //TODO: simplify to a single return
         receiveBuffer.clear();
@@ -151,5 +201,10 @@ public class BEClient {
         }
 
         return true;
+    }
+
+    public int nextSequenceNumber() {
+        sequenceNumber = sequenceNumber == 255 ? 0 : sequenceNumber++;
+        return sequenceNumber;
     }
 }
