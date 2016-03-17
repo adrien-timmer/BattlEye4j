@@ -7,6 +7,8 @@ import java.nio.ByteOrder;
 import java.nio.channels.DatagramChannel;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32;
 
@@ -22,7 +24,7 @@ public class BEClient {
     private DatagramChannel datagramChannel;
     private AtomicLong lastReceivedTime;
     private AtomicLong lastSentTime;
-    private int sequenceNumber;
+    private AtomicInteger sequenceNumber;
     private Queue<BECommand> commandQueue;
 
     Runnable receiveRunnable = () -> {
@@ -53,33 +55,36 @@ public class BEClient {
                         case Command: {
                             //Check to see if this message is segmented
                             receiveBuffer.get();
-                            if (receiveBuffer.get() == 0x00) {
-                                int totalPackets = receiveBuffer.get();
-                                int packetIndex = receiveBuffer.get();
-                                String[] messageArray = new String[totalPackets];
-                                messageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
-                                packetIndex++;
-
-                                //Process the next few packets
-                                while (packetIndex < totalPackets) {
-                                    receiveData();
-                                    receiveBuffer.position(12);
+                            //Check to prevent BufferUnderFlowException
+                            if(receiveBuffer.hasRemaining()){
+                                if (receiveBuffer.get() == 0x00) {
+                                    int totalPackets = receiveBuffer.get();
+                                    int packetIndex = receiveBuffer.get();
+                                    String[] messageArray = new String[totalPackets];
                                     messageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
                                     packetIndex++;
+
+                                    //Process the next few packets
+                                    while (packetIndex < totalPackets) {
+                                        receiveData();
+                                        receiveBuffer.position(12);
+                                        messageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
+                                        packetIndex++;
+                                    }
+
+                                    String completeMessage = "";
+                                    for (String message : messageArray) {
+                                        completeMessage += message;
+                                    }
+
+                                    System.out.println(completeMessage);
+                                } else {
+                                    receiveBuffer.get();
+                                    System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
                                 }
 
-                                String completeMessage = "";
-                                for (String message : messageArray) {
-                                    completeMessage += message;
-                                }
-
-                                System.out.println(completeMessage);
-                            } else {
-                                receiveBuffer.get();
-                                System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
+                                sendNextCommand();
                             }
-
-                            sendNextCommand();
                         }
                         break;
                         case Server: {
@@ -107,7 +112,30 @@ public class BEClient {
     Thread receiveThread = new Thread(receiveRunnable);
 
     Runnable monitorRunnable = () -> {
+        while(datagramChannel.isConnected()){
+            try {
+                TimeUnit.SECONDS.sleep(1);
+                System.out.println("Last received time: " + lastReceivedTime.get());
+                System.out.println("Last sent time: " + lastSentTime.get());
+                //Check to see if we've exceeded our timeout
+                if(lastSentTime.get() - lastReceivedTime.get() > 10000){
+                    disconnect();
+                }
 
+                //Send an empty packet to keep out connection alive
+                if(System.currentTimeMillis() - lastSentTime.get() >= 27000){
+                    try {
+                        constructPacket(BEMessageType.Command, nextSequenceNumber(), null);
+                        sendData();
+                        System.out.println("Sent keepalive");
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
     };
 
     Thread monitorThread = new Thread(monitorRunnable);
@@ -130,20 +158,20 @@ public class BEClient {
 
         lastSentTime = new AtomicLong(System.currentTimeMillis());
         lastReceivedTime = new AtomicLong(System.currentTimeMillis());
-        sequenceNumber = 0;
+        sequenceNumber = new AtomicInteger(0);
 
         receiveThread.start();
         monitorThread.start();
 
         constructPacket(BEMessageType.Login, -1, beloginCredential.getHostPassword());
         sendData();
-
-        sendCommand(BEMessageType.Command, BECommandType.Bans);
     }
 
     public void disconnect() {
         try {
+            System.out.println("Diconnected");
             commandQueue = null;
+            datagramChannel.disconnect();
             datagramChannel.close();
             receiveThread.interrupt();
             monitorThread.interrupt();
@@ -190,24 +218,24 @@ public class BEClient {
     }
 
     //Queues the command
-    public void sendCommand(BEMessageType messageType, BECommandType command){
+    public void sendCommand(BEMessageType messageType, BECommandType command) {
         BECommand beCommand = new BECommand(messageType, command.toString());
         commandQueue.add(beCommand);
     }
 
     //Queues the command
-    public void sendCommand(BEMessageType messageType, BECommandType command, String commandArgs){
+    public void sendCommand(BEMessageType messageType, BECommandType command, String commandArgs) {
         String commandString = command.toString();
-        if(commandArgs != null && !commandArgs.isEmpty())
+        if (commandArgs != null && !commandArgs.isEmpty())
             commandString += commandArgs;
 
         BECommand beCommand = new BECommand(messageType, commandString);
         commandQueue.add(beCommand);
     }
 
-    private void sendNextCommand(){
+    private void sendNextCommand() {
         BECommand command = commandQueue.poll();
-        if(command != null){
+        if (command != null) {
             try {
                 constructPacket(command.messageType, nextSequenceNumber(), command.command);
                 sendData();
@@ -246,7 +274,9 @@ public class BEClient {
     }
 
     private int nextSequenceNumber() {
-        sequenceNumber = sequenceNumber == 255 ? 0 : sequenceNumber++;
-        return sequenceNumber;
+        int tempSequenceNumber = sequenceNumber.get();
+        tempSequenceNumber = tempSequenceNumber == 255 ? 0 : tempSequenceNumber++;
+        sequenceNumber.set(tempSequenceNumber);
+        return sequenceNumber.get();
     }
 }
