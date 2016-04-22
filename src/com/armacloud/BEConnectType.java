@@ -1,21 +1,11 @@
 package com.armacloud;
 
-/**
- * Created by Adrien on 3/15/2016.
- */
-public enum BEConnectType {
-    Failure((byte) 0x00),
-    Success((byte) 0x01),
-    Unknown((byte) 0xFF);
+enum BEConnectType {
+    Failure(),
+    Success(),
+    Unknown();
 
-    private final byte type;
-
-    BEConnectType(byte type) {
-        this.type = type;
-    }
-
-    public byte getType() {
-        return type;
+    BEConnectType() {
     }
 
     public static BEConnectType convertByteToConnectType(byte byteToConvert){

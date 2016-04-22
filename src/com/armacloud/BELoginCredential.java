@@ -2,9 +2,6 @@ package com.armacloud;
 
 import java.net.InetSocketAddress;
 
-/**
- * Created by Adrien on 3/14/2016.
- */
 public class BELoginCredential {
 
     public InetSocketAddress hostAddress;
@@ -19,15 +16,7 @@ public class BELoginCredential {
         return hostAddress;
     }
 
-    public void setHostAddress(InetSocketAddress hostAddress) {
-        this.hostAddress = hostAddress;
-    }
-
     public String getHostPassword() {
         return hostPassword;
-    }
-
-    public void setHostPassword(String hostPassword) {
-        this.hostPassword = hostPassword;
     }
 }

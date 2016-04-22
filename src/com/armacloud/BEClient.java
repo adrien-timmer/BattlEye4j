@@ -12,10 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32;
 
-/**
- * Created by Adrien on 3/14/2016.
- */
-public class BEClient {
+class BEClient {
 
     private static final CRC32 CRC = new CRC32();
     private static ByteBuffer sendBuffer;
@@ -27,8 +24,8 @@ public class BEClient {
     private AtomicInteger sequenceNumber;
     private Queue<BECommand> commandQueue;
 
-    Runnable receiveRunnable = () -> {
-        //TODO: setup to only have one command sent at a time otherwhise received data maybe out of order
+    private Runnable receiveRunnable = () -> {
+        //TODO: setup to only have one command sent at a time otherwise received data maybe out of order
         try {
             while (datagramChannel.isConnected()) {
                 if (receiveData()) {
@@ -56,7 +53,7 @@ public class BEClient {
                             //Check to see if this message is segmented
                             receiveBuffer.get();
                             //Check to prevent BufferUnderFlowException
-                            if(receiveBuffer.hasRemaining()){
+                            if (receiveBuffer.hasRemaining()) {
                                 if (receiveBuffer.get() == 0x00) {
                                     int totalPackets = receiveBuffer.get();
                                     int packetIndex = receiveBuffer.get();
@@ -109,42 +106,41 @@ public class BEClient {
         }
     };
 
-    Thread receiveThread = new Thread(receiveRunnable);
+    private Thread receiveThread = new Thread(receiveRunnable);
+    private Thread monitorThread;
 
-    Runnable monitorRunnable = () -> {
-        while(datagramChannel.isConnected()){
-            try {
-                TimeUnit.SECONDS.sleep(1);
-                System.out.println("Last received time: " + lastReceivedTime.get());
-                System.out.println("Last sent time: " + lastSentTime.get());
-                //Check to see if we've exceeded our timeout
-                if(lastSentTime.get() - lastReceivedTime.get() > 10000){
-                    disconnect();
-                }
-
-                //Send an empty packet to keep out connection alive
-                if(System.currentTimeMillis() - lastSentTime.get() >= 27000){
-                    try {
-                        constructPacket(BEMessageType.Command, nextSequenceNumber(), null);
-                        sendData();
-                        System.out.println("Sent keepalive");
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-    };
-
-    Thread monitorThread = new Thread(monitorRunnable);
-
-    public BEClient(BELoginCredential beLoginCredential) {
+    BEClient(BELoginCredential beLoginCredential) {
         this.beloginCredential = beLoginCredential;
+        Runnable monitorRunnable = () -> {
+            while (datagramChannel.isConnected()) {
+                try {
+                    TimeUnit.SECONDS.sleep(1);
+                    System.out.println("Last received time: " + lastReceivedTime.get());
+                    System.out.println("Last sent time: " + lastSentTime.get());
+                    //Check to see if we've exceeded our timeout
+                    if (lastSentTime.get() - lastReceivedTime.get() > 10000) {
+                        disconnect();
+                    }
+
+                    //Send an empty packet to keep out connection alive
+                    if (System.currentTimeMillis() - lastSentTime.get() >= 27000) {
+                        try {
+                            constructPacket(BEMessageType.Command, nextSequenceNumber(), null);
+                            sendData();
+                            System.out.println("Sent keepalive");
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+        monitorThread = new Thread(monitorRunnable);
     }
 
-    public void connect() throws IOException {
+    void connect() throws IOException {
         datagramChannel = DatagramChannel.open();
         datagramChannel.connect(beloginCredential.getHostAddress());
 
@@ -167,7 +163,7 @@ public class BEClient {
         sendData();
     }
 
-    public void disconnect() {
+    private void disconnect() {
         try {
             System.out.println("Diconnected");
             commandQueue = null;
@@ -217,22 +213,6 @@ public class BEClient {
         }
     }
 
-    //Queues the command
-    public void sendCommand(BEMessageType messageType, BECommandType command) {
-        BECommand beCommand = new BECommand(messageType, command.toString());
-        commandQueue.add(beCommand);
-    }
-
-    //Queues the command
-    public void sendCommand(BEMessageType messageType, BECommandType command, String commandArgs) {
-        String commandString = command.toString();
-        if (commandArgs != null && !commandArgs.isEmpty())
-            commandString += commandArgs;
-
-        BECommand beCommand = new BECommand(messageType, commandString);
-        commandQueue.add(beCommand);
-    }
-
     private void sendNextCommand() {
         BECommand command = commandQueue.poll();
         if (command != null) {
@@ -275,7 +255,7 @@ public class BEClient {
 
     private int nextSequenceNumber() {
         int tempSequenceNumber = sequenceNumber.get();
-        tempSequenceNumber = tempSequenceNumber == 255 ? 0 : tempSequenceNumber++;
+        tempSequenceNumber = tempSequenceNumber == 255 ? 0 : tempSequenceNumber + 1;
         sequenceNumber.set(tempSequenceNumber);
         return sequenceNumber.get();
     }

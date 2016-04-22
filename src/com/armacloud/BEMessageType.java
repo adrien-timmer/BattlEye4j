@@ -1,9 +1,6 @@
 package com.armacloud;
 
-/**
- * Created by Adrien on 3/14/2016.
- */
-public enum BEMessageType {
+enum BEMessageType {
     Login((byte) 0x00),
 
     Command((byte) 0x01),
@@ -16,10 +13,6 @@ public enum BEMessageType {
 
     BEMessageType(byte type) {
         this.type = type;
-    }
-
-    public byte getType() {
-        return type;
     }
 
     public static BEMessageType convertByteToPacketType(byte byteToConvert){
@@ -40,5 +33,9 @@ public enum BEMessageType {
         }
 
         return packetType;
+    }
+
+    public byte getType() {
+        return type;
     }
 }

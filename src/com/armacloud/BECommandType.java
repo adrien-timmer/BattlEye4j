@@ -1,8 +1,5 @@
 package com.armacloud;
 
-/**
- * Created by Adrien on 3/14/2016.
- */
 public enum BECommandType {
     Init {
         public String toString() {
