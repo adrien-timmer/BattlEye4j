@@ -131,5 +131,11 @@ public enum BECommandType {
         public String toString() {
             return "admins";
         }
+    },
+
+    Empty {
+        public String toString() {
+            return "";
+        }
     }
 }

@@ -61,7 +61,7 @@ class BEClient {
                                     messageArray[packetIndex] = new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining());
                                     packetIndex++;
 
-                                    //Process the next few packets
+                                    //Process the remaining segmented messages
                                     while (packetIndex < totalPackets) {
                                         receiveData();
                                         receiveBuffer.position(12);
@@ -74,12 +74,13 @@ class BEClient {
                                         completeMessage += message;
                                     }
 
+                                    System.out.println("Received a command response");
                                     System.out.println(completeMessage);
                                 } else {
-                                    receiveBuffer.get();
+                                    receiveBuffer.position(receiveBuffer.position() - 1);
+                                    System.out.println("Received a command response");
                                     System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
                                 }
-
                                 sendNextCommand();
                             }
                         }
@@ -127,7 +128,7 @@ class BEClient {
                         try {
                             constructPacket(BEMessageType.Command, nextSequenceNumber(), null);
                             sendData();
-                            System.out.println("Sent keepalive");
+                            System.out.println("Sent keep alive");
                         } catch (IOException e) {
                             e.printStackTrace();
                         }
@@ -154,7 +155,7 @@ class BEClient {
 
         lastSentTime = new AtomicLong(System.currentTimeMillis());
         lastReceivedTime = new AtomicLong(System.currentTimeMillis());
-        sequenceNumber = new AtomicInteger(0);
+        sequenceNumber = new AtomicInteger(-1);
 
         receiveThread.start();
         monitorThread.start();
@@ -165,7 +166,7 @@ class BEClient {
 
     private void disconnect() {
         try {
-            System.out.println("Diconnected");
+            System.out.println("Disconnected");
             commandQueue = null;
             datagramChannel.disconnect();
             datagramChannel.close();
@@ -179,7 +180,7 @@ class BEClient {
         }
     }
 
-    //Contructs a packet following the BE protocol
+    //Construct a packet following the BE protocol
     //See http://www.battleye.com/downloads/BERConProtocol.txt for details
     private void constructPacket(BEMessageType messageType, int sequenceNumber, String command) throws IOException {
         sendBuffer.clear();
@@ -214,13 +215,15 @@ class BEClient {
     }
 
     private void sendNextCommand() {
-        BECommand command = commandQueue.poll();
-        if (command != null) {
-            try {
-                constructPacket(command.messageType, nextSequenceNumber(), command.command);
-                sendData();
-            } catch (IOException e) {
-                e.printStackTrace();
+        if (commandQueue != null && commandQueue.size() >= 1) {
+            BECommand command = commandQueue.poll();
+            if (command != null) {
+                try {
+                    constructPacket(command.messageType, nextSequenceNumber(), command.command);
+                    sendData();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
     }
@@ -258,5 +261,24 @@ class BEClient {
         tempSequenceNumber = tempSequenceNumber == 255 ? 0 : tempSequenceNumber + 1;
         sequenceNumber.set(tempSequenceNumber);
         return sequenceNumber.get();
+    }
+
+    void sendCommand(BECommandType commandType) {
+        BECommand command = new BECommand(BEMessageType.Command, commandType.toString());
+        queueCommand(command);
+    }
+
+    void sendCommand(BECommandType commandType, String commandArgs) {
+        BECommand command = new BECommand(BEMessageType.Command, commandType.toString() + commandArgs);
+        queueCommand(command);
+    }
+
+    private void queueCommand(BECommand command) {
+        if (commandQueue.size() >= 1) {
+            commandQueue.add(command);
+        } else {
+            commandQueue.add(command);
+            sendNextCommand();
+        }
     }
 }
