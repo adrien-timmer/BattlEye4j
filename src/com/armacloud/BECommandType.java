@@ -51,19 +51,19 @@ public enum BECommandType {
 
     RConPassword {
         public String toString() {
-            return "rconpassword ";
+            return "rconpassword";
         }
     },
 
     MaxPing {
         public String toString() {
-            return "maxping ";
+            return "maxping";
         }
     },
 
     Kick {
         public String toString() {
-            return "kick ";
+            return "kick";
         }
     },
 
@@ -105,19 +105,19 @@ public enum BECommandType {
 
     Ban {
         public String toString() {
-            return "ban ";
+            return "ban";
         }
     },
 
     AddBan {
         public String toString() {
-            return "addban ";
+            return "addban";
         }
     },
 
     RemoveBan {
         public String toString() {
-            return "removeban ";
+            return "removeban";
         }
     },
 
