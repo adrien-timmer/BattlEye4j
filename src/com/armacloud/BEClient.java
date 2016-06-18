@@ -5,9 +5,12 @@ import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.DatagramChannel;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.CRC32;
@@ -17,13 +20,17 @@ class BEClient {
     private static final CRC32 CRC = new CRC32();
     private static ByteBuffer sendBuffer;
     private static ByteBuffer receiveBuffer;
+    private final List<ConnectionHandler> connectionHandlerList;
+    private final List<ResponseHandler> responseHandlerList;
+    public AtomicBoolean connected;
     private BELoginCredential beloginCredential;
     private DatagramChannel datagramChannel;
     private AtomicLong lastReceivedTime;
     private AtomicLong lastSentTime;
     private AtomicInteger sequenceNumber;
     private Queue<BECommand> commandQueue;
-
+    private Thread receiveThread = new Thread(receiveRunnable);
+    private Thread monitorThread;
     private Runnable receiveRunnable = () -> {
         //TODO: setup to only have one command sent at a time otherwise received data maybe out of order
         try {
@@ -33,18 +40,20 @@ class BEClient {
                     BEMessageType messageType = BEMessageType.convertByteToPacketType(receiveBuffer.get());
                     switch (messageType) {
                         case Login: {
-                            System.out.println("Received login message");
                             //TODO: handle response timeout (indicates that BE is not enabled on the host)
                             BEConnectType connectionResult = BEConnectType.convertByteToConnectType(receiveBuffer.array()[8]);
                             switch (connectionResult) {
                                 case Failure:
-                                    System.out.println("Failed to login");
+                                    fireConnectionConnectedEvent(BEConnectType.Failure);
+                                    disconnect(BEDisconnectType.ConnectionLost);
                                     break;
                                 case Success:
-                                    System.out.println("Successful login");
+                                    fireConnectionConnectedEvent(BEConnectType.Success);
+                                    connected.set(true);
                                     break;
                                 case Unknown:
-                                    System.out.println("Login received an unexpected response");
+                                    fireConnectionConnectedEvent(BEConnectType.Unknown);
+                                    disconnect(BEDisconnectType.ConnectionLost);
                                     break;
                             }
                         }
@@ -74,12 +83,10 @@ class BEClient {
                                         completeMessage += message;
                                     }
 
-                                    System.out.println("Received a command response");
-                                    System.out.println(completeMessage);
+                                    fireResponseEvent(completeMessage);
                                 } else {
                                     receiveBuffer.position(receiveBuffer.position() - 1);
-                                    System.out.println("Received a command response");
-                                    System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
+                                    fireResponseEvent(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
                                 }
                                 sendNextCommand();
                             }
@@ -87,16 +94,15 @@ class BEClient {
                         break;
                         case Server: {
                             //Output the message and send an acknowledgement to the server
-                            System.out.println("Received server message");
                             byte serverSequenceNumber = receiveBuffer.get();
-                            System.out.println(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
+                            fireResponseEvent(new String(receiveBuffer.array(), receiveBuffer.position(), receiveBuffer.remaining()));
                             constructPacket(BEMessageType.Server, serverSequenceNumber, null);
                             sendData();
                             sendNextCommand();
                         }
                         break;
                         case Unknown: {
-                            System.out.println("Received unknown packet/response type");
+                            //?
                         }
                         break;
                     }
@@ -107,11 +113,10 @@ class BEClient {
         }
     };
 
-    private Thread receiveThread = new Thread(receiveRunnable);
-    private Thread monitorThread;
-
     BEClient(BELoginCredential beLoginCredential) {
         this.beloginCredential = beLoginCredential;
+        connectionHandlerList = new ArrayList<>();
+        responseHandlerList = new ArrayList<>();
         Runnable monitorRunnable = () -> {
             while (datagramChannel.isConnected()) {
                 try {
@@ -120,10 +125,10 @@ class BEClient {
                     System.out.println("Last sent time: " + lastSentTime.get());
                     //Check to see if we've exceeded our timeout
                     if (lastSentTime.get() - lastReceivedTime.get() > 10000) {
-                        disconnect();
+                        disconnect(BEDisconnectType.ConnectionLost);
                     }
 
-                    //Send an empty packet to keep out connection alive
+                    //Send an empty packet to keep our connection alive
                     if (System.currentTimeMillis() - lastSentTime.get() >= 27000) {
                         try {
                             constructPacket(BEMessageType.Command, nextSequenceNumber(), null);
@@ -156,17 +161,19 @@ class BEClient {
         lastSentTime = new AtomicLong(System.currentTimeMillis());
         lastReceivedTime = new AtomicLong(System.currentTimeMillis());
         sequenceNumber = new AtomicInteger(-1);
+        connected = new AtomicBoolean(false);
 
         receiveThread.start();
         monitorThread.start();
 
+        //Login packet is a bit unique since we want to set -1 as the sequence number
         constructPacket(BEMessageType.Login, -1, beloginCredential.getHostPassword());
         sendData();
     }
 
-    private void disconnect() {
+    private void disconnect(BEDisconnectType disconnectType) {
         try {
-            System.out.println("Disconnected");
+            connected.set(false);
             commandQueue = null;
             datagramChannel.disconnect();
             datagramChannel.close();
@@ -175,6 +182,7 @@ class BEClient {
             receiveThread = null;
             sendBuffer = null;
             receiveBuffer = null;
+            fireConnectionDisconnectVent(disconnectType);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -231,25 +239,21 @@ class BEClient {
     //Receives and validates the incoming packet
     //'B'(0x42) | 'E'(0x45) | 4-byte CRC32 checksum of the subsequent bytes | 0xFF
     private boolean receiveData() throws IOException {
-        //TODO: simplify to a single return
         receiveBuffer.clear();
         int read = datagramChannel.read(receiveBuffer);
         if (read < 7) {
-            System.out.println("Received invalid header size");
             return false;
         }
 
         receiveBuffer.flip();
 
         if (receiveBuffer.get() != (byte) 'B' || receiveBuffer.get() != (byte) 'E') {
-            System.out.println("Received invalid header");
             return false;
         }
 
         receiveBuffer.getInt();
 
         if (receiveBuffer.get() != (byte) 0xFF) {
-            System.out.println("Received invalid header");
             return false;
         }
 
@@ -268,8 +272,13 @@ class BEClient {
         queueCommand(command);
     }
 
-    void sendCommand(BECommandType commandType, String commandArgs) {
-        BECommand command = new BECommand(BEMessageType.Command, commandType.toString() + commandArgs);
+    void sendCommand(BECommandType commandType, String... commandArgs) {
+        StringBuilder commandBuilder = new StringBuilder(commandType.toString());
+        for (String arg : commandArgs) {
+            commandBuilder.append(' ');
+            commandBuilder.append(arg);
+        }
+        BECommand command = new BECommand(BEMessageType.Command, commandBuilder.toString());
         queueCommand(command);
     }
 
@@ -279,6 +288,32 @@ class BEClient {
         } else {
             commandQueue.add(command);
             sendNextCommand();
+        }
+    }
+
+    void addConnectionHandler(ConnectionHandler connectionHandler) {
+        connectionHandlerList.add(connectionHandler);
+    }
+
+    void addResponseHandler(ResponseHandler responseHandler) {
+        responseHandlerList.add(responseHandler);
+    }
+
+    private void fireConnectionConnectedEvent(BEConnectType connectType) {
+        for (ConnectionHandler connectionHandler : connectionHandlerList) {
+            connectionHandler.onConnected(connectType);
+        }
+    }
+
+    private void fireConnectionDisconnectVent(BEDisconnectType disconnectType) {
+        for (ConnectionHandler connectionHandler : connectionHandlerList) {
+            connectionHandler.onDisconnected(disconnectType);
+        }
+    }
+
+    private void fireResponseEvent(String response) {
+        for (ResponseHandler responseHandler : responseHandlerList) {
+            responseHandler.onResponse(response);
         }
     }
 }

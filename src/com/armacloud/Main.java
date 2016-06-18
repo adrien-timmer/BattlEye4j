@@ -10,9 +10,12 @@ public class Main {
         BELoginCredential loginCredential = new BELoginCredential(hostAddress, "password");
         BEClient beClient = new BEClient(loginCredential);
         try {
+            beClient.addResponseHandler(response -> System.out.println(response));
             beClient.connect();
             Thread.sleep(5000);
-            beClient.sendCommand(BECommandType.Players);
+            if (beClient.connected.get()) {
+                beClient.sendCommand(BECommandType.Players);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         } catch (InterruptedException e) {
