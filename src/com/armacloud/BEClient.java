@@ -17,20 +17,18 @@ import java.util.zip.CRC32;
 
 class BEClient {
 
+    public AtomicBoolean connected;
     private static final CRC32 CRC = new CRC32();
     private static ByteBuffer sendBuffer;
     private static ByteBuffer receiveBuffer;
     private final List<ConnectionHandler> connectionHandlerList;
     private final List<ResponseHandler> responseHandlerList;
-    public AtomicBoolean connected;
     private BELoginCredential beloginCredential;
     private DatagramChannel datagramChannel;
     private AtomicLong lastReceivedTime;
     private AtomicLong lastSentTime;
     private AtomicInteger sequenceNumber;
     private Queue<BECommand> commandQueue;
-    private Thread receiveThread = new Thread(receiveRunnable);
-    private Thread monitorThread;
     private Runnable receiveRunnable = () -> {
         //TODO: setup to only have one command sent at a time otherwise received data maybe out of order
         try {
@@ -112,6 +110,9 @@ class BEClient {
             e.printStackTrace();
         }
     };
+
+    private Thread receiveThread = new Thread(receiveRunnable);
+    private Thread monitorThread;
 
     BEClient(BELoginCredential beLoginCredential) {
         this.beloginCredential = beLoginCredential;
